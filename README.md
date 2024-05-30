@@ -18,9 +18,3 @@ For any inquiries or questions regarding the scripts, or the research presented 
 Note:
 This repository is for informational purposes only.
 The data may be subject to ethical considerations or restrictions depending on the PediCAP study protocols. Please contact the University of Antwerp, Laboratory of Medical Microbiology for further inquiries regarding the PediCAP study itself or the data displayed here.
-
-Citation:
-
-If you use the data or scripts in your research, please consider citing the following:
-
-[Your Name]. [Year]. Title of your Master's Thesis. University of Antwerp.
