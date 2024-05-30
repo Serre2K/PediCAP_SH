@@ -8,8 +8,8 @@ Data:
 The data folder contains the files generated from Kraken for analysis.
 File formats and additional information about the data may be found within the folder.
 
-Script:
-The .Rmd file is a markdown document containing the R code used to analyze the Kraken-generated data.
+Scripts:
+The .Rmd files are a markdown document containing the different R codes used to analyze the sequencing data.
 This script requires R and relevant packages to run.
 
 Contact:
