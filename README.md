@@ -1,11 +1,11 @@
-README
+README:
 This repository contains metagenomic sequencing data and analysis scripts used to investigate the microbial communities in a pediatric pneumonia study (PediCAP) for my Master's thesis.
 
 Purpose:
 This data and script are provided for transparency and reproducibility of the research conducted in my thesis.
 
 Data:
-The data folder contains the files generated through Illumina NextSeq for analysis of perirectal samples from the PediCAP study.
+The data folder contains the files generated through Illumina NextSeq for analysis of perirectal samples from the PediCAP study. Metadata is supplied and is absent of all identifiers, additionally the knitted output files are supplied.
 File formats and additional information about the data can be found within the folders.
 
 Scripts:
