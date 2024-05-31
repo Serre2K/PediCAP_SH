@@ -1,0 +1,1626 @@
+---
+title: "PediCAP_analysis_script_threshold_500K"
+author: "SH&JPRR"
+date: "2024-05-27"
+output: html_document
+---
+
+```{r setup, include=TRUE}
+# set up global R options
+options(digits = 4)
+knitr::opts_chunk$set(echo = TRUE)
+
+# This is a code written for the statistical analysis of the PediCAP trial samples as part of SH's masters dissertation. The code was written by Juan Pablo Rodriguez Ruiz and Servaas Hiel.
+
+library(vegan)
+# library(tidyverse)
+library(ggsignif)
+library(tibble)
+library(RColorBrewer)
+# library(gridExtra)
+library(grid)
+# library(devtools)
+library(patchwork)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+# library(viridis)
+# library(cowplot)
+library(reshape2)
+# library(lawstat)
+# library(ggh4x)
+# library(labdsv)
+library(cluster)
+# library(dendextend)
+library(MASS)
+# library(car) 
+library(phyloseq)
+# library(corrplot)
+# library(ComplexHeatmap)
+# library(circlize)
+library(colorspace)
+# library(GetoptLong)
+library(DESeq2)
+library(decontam)
+library("pheatmap")
+library(FSA)
+
+```
+
+```{r data_upload_for_decontam}
+
+species1 <- t(read.csv("~/data/Servaas/PediCAP/R_input/bracken_uhgg_summary_num2.csv", header = TRUE, row.names = 1, check.names = FALSE))
+# check.names made difference bcs otherwise you had to change the metadata - to a point
+genus1 <- t(read.csv("~/data/Servaas/PediCAP/R_input/bracken_uhgg_genus_summary_num.csv", header = TRUE, row.names = 1, check.names = FALSE))
+metadata <- read.csv("~/data/Servaas/PediCAP/Metadata.csv", header = TRUE,row.names=1, check.names = FALSE)
+# rownames(metadata) = metadata$Samples
+# colnames(metadata)[1] = "Samples"
+
+```
+
+```{r decontam}
+
+# merge with metadata
+genus_merged <- merge(metadata, genus1, by = "row.names", all =TRUE)
+rownames(genus_merged) = genus_merged$Row.names
+genus_merged = genus_merged[2:length(genus_merged)]
+
+genus_neg <- genus_merged[,c(4)]
+genus_kit <- genus_merged[,c(7)]
+genus_date <- genus_merged[,c(1)] #extraction day
+
+species_merged <- merge(metadata, species1, by = "row.names", all =TRUE)
+rownames(species_merged) = species_merged$Row.names
+species_merged = species_merged[2:length(species_merged)]
+
+species_neg <- species_merged[,c(4)]
+species_kit <- species_merged[,c(7)]
+species_date <- species_merged[,c(1)]
+
+## decontam
+# genus_cont <- isContaminant(genus, neg = genus_neg, batch = genus_box)
+genus_cont <- isContaminant(genus1, neg = genus_neg, batch = genus_date)
+# genus_cont_kit <- isContaminant(genus1, neg = genus_neg, batch = genus_kit)
+# species_cont <- isContaminant(species, neg = species_neg, batch = species_box)
+species_cont <- isContaminant(species1, neg = species_neg, batch = species_date)
+# species_cont_kit <- isContaminant(species1, neg = species_neg, batch = species_kit)
+
+# View(as.data.frame(species_neg)) -> command to help troubleshoot integer/log values
+
+## remove cont
+
+transposed_genus <- data.matrix(t(genus1))
+# genus_cont[817,6] = FALSE # have to change this, was bcs pneumonia was set as contaminant so go through file and see if any should be changed
+genus_cont_merged <- merge(genus_cont, transposed_genus, by = "row.names", all = TRUE)
+rownames(genus_cont_merged) = genus_cont_merged$Row.names
+genus_cont_merged = genus_cont_merged[2:length(genus_cont_merged)]
+genus_cont_removed <- genus_cont_merged[genus_cont_merged$contaminant == FALSE,]
+genus_cont_removed <- genus_cont_removed[7:length(genus_cont_removed)]
+write.csv(genus_cont_removed, "~/data/Servaas/PediCAP/R_output/Decontam/genus_cont_removed_500K.csv")
+
+transposed_species <- data.matrix(t(species1))
+# species_cont[7398,6] = FALSE # see above
+species_cont_merged <- merge(species_cont, transposed_species, by = "row.names", all = TRUE)
+rownames(species_cont_merged) = species_cont_merged$Row.names
+species_cont_merged = species_cont_merged[2:length(species_cont_merged)]
+species_cont_removed <- species_cont_merged[species_cont_merged$contaminant == FALSE,]
+species_cont_removed <- species_cont_removed[7:length(species_cont_removed)]
+write.csv(species_cont_removed, "~/data/Servaas/PediCAP/R_output/Decontam/species_cont_removed_500K.csv")
+
+# ## divide per kit?
+# genus_1 <- genus_merged[genus_merged$Kit == 1,]
+# genus_1_neg <- genus_1[,c(4)]
+# # genus_1 = data.matrix(genus_1[10:length(genus_1)])
+# genus_1_cont <- isContaminant(genus_1, neg = genus_1_neg, threshold = 0.5)
+# 
+# species_1 <- speciesmerged[species_merged$Box == 1,]
+# species_1_neg <- species_1[,c(4)]
+# # species_1 = data.matrix(species_1[10:length(species_1)])
+# species_1_cont <- isNotContaminant(species_1, neg = species_1_neg, detailed = TRUE)
+# 
+# genus_2 <- genus[genus$Kit == 2,]
+# # genus_2 = genus_2[10:length(genus_2)]
+# # neg_genus_2 <- neg_genus[7,]
+# 
+# genus_3 <- genus[genus$Kit == 3,]
+# # genus_3 = genus_3[10:length(genus_3)]
+# # neg_genus_3 <- neg_genus[8,]
+
+table(species_cont$contaminant)
+# table(species_cont_kit$contaminant)
+
+table(genus_cont$contaminant)
+# table(genus_cont_kit$contaminant)
+
+
+```
+
+```{r data_selection_based_on_threshold}
+
+species <- t(species_cont_removed) # check if negatives are removed from here, okay
+# check.names made difference bcs otherwise you had to change the metadata - to a point
+genus <- t(genus_cont_removed)
+
+genus_merged <- merge(metadata, genus, by = "row.names", all =TRUE)
+rownames(genus_merged) = genus_merged$Row.names
+genus_merged = genus_merged[2:length(genus_merged)]
+
+species_merged <- merge(metadata, species, by = "row.names", all =TRUE)
+rownames(species_merged) = species_merged$Row.names
+species_merged = species_merged[2:length(species_merged)]
+
+genus_merged <- genus_merged[genus_merged$Threshold500 == "TRUE",]
+species_merged <- species_merged[species_merged$Threshold500 == "TRUE",]
+
+genus <- genus_merged[19:length(genus_merged)]
+species <- species_merged[19:length(species_merged)]
+
+```
+
+```{r normalization}
+
+species_otu = otu_table(species, taxa_are_rows = FALSE)
+resample_species = rarefy_even_depth(species_otu, replace = TRUE, rngseed = 711)
+species_resampled = as.data.frame(resample_species)
+
+genus_otu = otu_table(genus, taxa_are_rows = FALSE)
+resample_genus = rarefy_even_depth(genus_otu, replace = TRUE, rngseed = 711)
+genus_resampled = as.data.frame(resample_genus)
+
+# rarefaction curves, plot them separate, don't work well with knitting
+# species rarefaction curve
+rarefaction_species <- species_otu
+class(rarefaction_species) <- "matrix"
+# otu.rarecurve1k_species = rarecurve(rarefaction_species, step = 1000, label = FALSE, cex = 0.6,  xlab= "Sequences per sample with step 1000 with threshold 500K", ylab= "OTU's") # to see if it affects low read samples
+# otu.rarecurve1k_species = rarecurve(rarefaction_species, step = 1000, label = T, cex = 0.6,  xlab= "Sequences per sample with step 1000 with threshold 500K", ylab= "OTU's")
+# otu.rarecurve10k_species = rarecurve(rarefaction_species, step = 10000, label = FALSE, cex = 0.6,  xlab= "Number of species reads with step 10000", ylab= "OTU's")
+
+# genus rarefaction curve
+# Error in as(x, "matrix")[i, j, drop = FALSE] : (subscript) logical subscript too long
+rarefaction_genus <- genus_otu
+class(rarefaction_genus) <- "matrix"
+# otu.rarecurve1k_genus = rarecurve(rarefaction_genus, step = 1000, label = FALSE, cex = 0.6,  xlab= "Number of genus reads with step 1000 with threshold 500K", ylab= "OTU's") # to see if it affects low read samples
+# otu.rarecurve1k_genus = rarecurve(rarefaction_genus, step = 1000, label = FALSE, cex = 0.6,  xlab= "Number of genus reads with step 1000 with threshold 500K", ylab= "OTU's")
+# otu.rarecurve10k_genus = rarecurve(rarefaction_genus, step = 10000, label = FALSE, cex = 0.6,  xlab= "Number of genus reads with step 10000 with threshold 500K", ylab= "OTU's")
+# otu.rarecurve10k_genus = rarecurve(rarefaction_genus, step = 10000, label = FALSE, cex = 0.6,  xlab= "Number of genus reads with step 10000 with threshold 500K", ylab= "OTU's")
+
+```
+
+```{r calculate_alpha_diversity}
+
+species_shannon_resampled <- diversity(species_resampled, index = "shannon")
+species_simpson_resampled <- diversity(species_resampled, index = "simpson")
+species_invsimpson_resampled <- diversity(species_resampled, index = "invsimpson") # didnt do this, is inverse of classical simpson diversity estimator. is estimation of richness in a community with uniform evenness that would have the same level of diversity
+species_unbsimpson_resampled <- simpson.unb(species_resampled) # simpson.unb finds unbiased simpson indices for discrete samples, are less sensitive to sample size than basic simpson indices, only possible for data of integer counts
+species_richness_resampled <- specnumber(species_resampled) # finds number of species per sample 
+species_evenness_resampled <- species_shannon_resampled/log(species_richness_resampled)
+
+
+alpha_species_resampled <- cbind(Shannon = species_shannon_resampled, Simpson = species_simpson_resampled, InvSimpson = species_invsimpson_resampled, UnbSimpson = species_unbsimpson_resampled, Richness = species_richness_resampled, Evenness = species_evenness_resampled, Totalreads = rowSums(species))
+# shannon = ... the shannon is the column name that will appear in the final df
+
+metadata <- merge(metadata, alpha_species_resampled, by = "row.names", all =TRUE)
+    rownames(metadata) = metadata$Row.names
+metadata = metadata[2:length(metadata)]
+
+# since threshold20 applied, after merging with metadata there were NA's since the below 20K threshold were still there
+metadata <- na.omit(metadata)
+
+genus_shannon_resampled <- diversity(genus_resampled, index = "shannon")
+genus_simpson_resampled <- diversity(genus_resampled, index = "simpson")
+genus_invsimpson_resampled <- diversity(genus_resampled, index = "invsimpson")
+genus_unbsimpson_resampled <- simpson.unb(genus_resampled)
+genus_richness_resampled <- specnumber(genus_resampled)
+genus_evenness_resampled <- genus_shannon_resampled/log(genus_richness_resampled)
+
+alpha_genus_resampled <- cbind(Shannon_genus = genus_shannon_resampled, Simpson_genus = genus_simpson_resampled, InvSimpson_genus = genus_invsimpson_resampled, UnbSimpson_genus = genus_unbsimpson_resampled, Richness_genus = genus_richness_resampled, Evenness_genus = genus_evenness_resampled, Totalreads_genus = rowSums(genus))
+
+metadata <- merge(metadata, alpha_genus_resampled, by = "row.names", all =TRUE)
+    rownames(metadata) = metadata$Row.names
+metadata = metadata[2:length(metadata)]
+
+# since threshold20 applied, after merging with metadata there were NA's since the below 20K threshold were still there
+metadata <- na.omit(metadata)
+
+metadata <- metadata[,1:32]
+colnames(metadata)[19] <- "Shannon"
+colnames(metadata)[20] <- "Simpson"
+colnames(metadata)[21] <- "InvSimpson"
+colnames(metadata)[22] <- "UnbSimpson"
+colnames(metadata)[23] <- "Richness"
+colnames(metadata)[24] <- "Evenness"
+colnames(metadata)[25] <- "Totalreads"
+
+colnames(metadata)[26] <- "Shannon_genus"
+colnames(metadata)[27] <- "Simpson_genus"
+colnames(metadata)[28] <- "InvSimpson_genus"
+colnames(metadata)[29] <- "UnbSimpson_genus"
+colnames(metadata)[30] <- "Richness_genus"
+colnames(metadata)[31] <- "Evenness_genus"
+colnames(metadata)[32] <- "Totalreads_genus"
+
+```
+
+```{r alpha_diversity_removal}
+
+# rm(list=c("species_evenness_resampled","species_richness_resampled","species_invsimpson_resampled","species_simpson_resampled","species_shannon_resampled","species_unbsimpson_resampled","genus_shannon_resampled","genus_simpson_resampled","genus_invsimpson_resampled","genus_unbsimpson_resampled","genus_richness_resampled","genus_evenness_resampled")) # removes temporary files
+
+```
+
+```{r calculate_beta_diversity}
+
+species_betabray_resampled <- vegdist(species_resampled, method = "bray")
+genus_betabray_resampled <- vegdist(genus_resampled, method = "bray")
+
+```
+
+```{r normality}
+# check if both or normally distributed or not, otherwise change next anova calculations
+shapiro.test(metadata$Shannon) #species
+shapiro.test(metadata$Shannon_genus) #genus
+# genus normally distributed for 500K threshold
+```
+
+```{r ANOVA}
+
+# anova_extr_sp = aov(Shannon ~ Extraction, metadata)
+# TukeyHSD(anova_extr_sp)
+# 
+# anova_colour_sp = aov(Shannon ~ Colour, metadata)
+# TukeyHSD(anova_colour_sp)
+# 
+# anova_pcr_sp = aov(Shannon ~ PCR, metadata)
+# TukeyHSD(anova_pcr_sp)
+# 
+# anova_kit_sp = aov(Shannon ~ Kit, metadata)
+# TukeyHSD(anova_kit_sp)
+
+## change to non parametric if it is non parametric
+kruskal_extr_species = kruskal.test(metadata$Shannon ~ metadata$Extraction)
+kruskal_extr_species # only extraction is significant
+dunnTest(metadata$Shannon ~ metadata$Extraction, method="bonferroni")
+
+kruskal_site_species = kruskal.test(metadata$Shannon ~ metadata$Site)
+kruskal_site_species
+dunnTest(metadata$Shannon ~ metadata$Site, method="bonferroni")
+
+# all observations are in the same group
+# kruskal_pcr_species = kruskal.test(metadata$Shannon ~ metadata$PCR)
+# kruskal_pcr_species
+# dunnTest(metadata$Shannon ~ metadata$PCR, method="bonferroni")
+
+kruskal_kit_species = kruskal.test(metadata$Shannon ~ metadata$Kit)
+kruskal_kit_species
+dunnTest(metadata$Shannon ~ metadata$Kit, method="bonferroni")
+
+kruskal_colour_species = kruskal.test(metadata$Shannon ~ metadata$Colour)
+kruskal_colour_species
+dunnTest(metadata$Shannon ~ metadata$Colour, method="bonferroni")
+
+
+anova_extr = aov(Shannon_genus ~ Extraction, metadata)
+TukeyHSD(anova_extr)
+
+anova_colour = aov(Shannon_genus ~ factor(Colour), metadata)
+TukeyHSD(anova_colour) # Warning: non-factors ignored: ColourError in TukeyHSD.aov(anova_colour) : no factors in the fitted model
+
+# anova_pcr = aov(Shannon_genus ~ factor(PCR), metadata)
+# TukeyHSD(anova_pcr)
+
+anova_kit = aov(Shannon_genus ~ factor(Kit), metadata)
+TukeyHSD(anova_kit)
+
+# ## change to non parametric if it is non parametric
+# kruskal_extr_genus = kruskal.test(metadata$Shannon_genus ~ metadata$Extraction)
+# kruskal_extr_genus # only extraction is significant
+# dunnTest(metadata$Shannon_genus ~ metadata$Extraction, method="bonferroni")
+# 
+# kruskal_site_genus = kruskal.test(metadata$Shannon_genus ~ metadata$Site)
+# kruskal_site_genus
+# dunnTest(metadata$Shannon_genus ~ metadata$Site, method="bonferroni")
+# 
+# kruskal_kit_genus = kruskal.test(metadata$Shannon_genus ~ metadata$Kit)
+# kruskal_kit_genus
+# dunnTest(metadata$Shannon_genus ~ metadata$Kit, method="bonferroni")
+# 
+# kruskal_colour_genus = kruskal.test(metadata$Shannon_genus ~ metadata$Colour)
+# kruskal_colour_genus
+# dunnTest(metadata$Shannon_genus ~ metadata$Colour, method="bonferroni")
+# 
+# kruskal_pcr_genus = kruskal.test(metadata$Shannon_genus ~ metadata$PCR)
+# kruskal_pcr_genus
+# dunnTest(metadata$Shannon_genus ~ metadata$PCR, method="bonferroni")
+
+```
+
+```{r anova_removal}
+
+# rm(list=c("anova_extr", "anova_colour", "anova_pcr", "anova_kit", "anova_20k", "anova_50k", "anova_100k", "anova_500k", "anova_extr_sp", "anova_colour_sp", "anova_pcr_sp", "anova_kit_sp", "anova_20k_sp", "anova_50k_sp", "anova_100k_sp", "anova_500k_sp")) # removes temporary files
+
+# rm(list=c("kruskal_extr_genus", "kruskal_site_genus", "kruskal_pcr_genus", "kruskal_kit_genus", "kruskal_colour_genus", "kruskal_20k_genus", "kruskal_50k_genus", "kruskal_100k_genus", "kruskal_500k_genus", "kruskal_extr_species", "kruskal_site_species", "kruskal_pcr_species", "kruskal_kit_species", "kruskal_colour_species", "kruskal_20k_species", "kruskal_50k_species", "kruskal_100k_species", "kruskal_500k_species")) # removes temporary files
+
+```
+
+```{r pcoa raw_resampled bray}
+
+pcoa_species_resampled <- cmdscale(species_betabray_resampled, k = 2, eig = T)
+pcoa_species_resampled_plotting <- as.data.frame(pcoa_species_resampled$points)
+colnames(pcoa_species_resampled_plotting) <- c("axis_1", "axis_2")
+
+# metadata was wrongly coupled bcs control was first row and in other last row
+metadata_pcoa <- metadata
+# metadata_pcoa <- metadata_pcoa[c(17,1:16),] # reordering to fix it
+
+pcoa_species_resampled_plotting$Extraction <- metadata_pcoa$Extraction
+pcoa_species_resampled_plotting$Site <- metadata_pcoa$Site
+pcoa_species_resampled_plotting$Colour <- metadata_pcoa$Colour
+pcoa_species_resampled_plotting$PCR <- metadata_pcoa$PCR
+pcoa_species_resampled_plotting$Kit <- metadata_pcoa$Kit
+pcoa_species_resampled_plotting$Site_kit <- paste(metadata_pcoa$Site, metadata_pcoa$Kit)
+pcoa_species_resampled_plotting$PCR_col <- paste(metadata_pcoa$PCR, metadata_pcoa$Colour)
+pcoa_species_resampled_plotting$Extr_kit <- paste(metadata_pcoa$Extraction, metadata_pcoa$Kit)
+pcoa_species_resampled$eig[1]/(sum(pcoa_species_resampled$eig)) # calculating pcoa percentage
+pcoa_species_resampled$eig[2]/(sum(pcoa_species_resampled$eig)) # calculating pcoa percentage
+
+pcoa_species_extr <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Extraction)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73","black")) +
+  theme_bw() +
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "PCoA at the species level per extraction day", tag = "C") +
+  guides(color = guide_legend(title = "Extraction method")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_extr
+
+pcoa_species_site <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Site)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73")) +
+  theme_bw() +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "PCoA at the species level per country of origin", tag = "C") +
+  guides(color = guide_legend(title = "Country of origin")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_site
+
+pcoa_species_col <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Colour)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "Species PCoA and colour of swab", tag = "C") +
+  guides(color = guide_legend(title = "Coloured swab?")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_col
+
+pcoa_species_pcr <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = PCR)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "Species PCoA and a visible 16S PCR band", tag = "C") +
+  guides(color = guide_legend(title = "Visible 16S PCR band?")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_pcr
+
+pcoa_species_kit <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = as.factor(Kit))) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "Species PCoA and the number of kit", tag = "C") +
+  guides(color = guide_legend(title = "Number of kit used")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_kit
+
+pcoa_species_sitekit <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Site_kit)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "Species PCoA per country and kit used", tag = "D") +
+  guides(color = guide_legend(title = "Country and kit used")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_sitekit
+
+pcoa_species_pcrcol <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = PCR_col)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "Species PCoA for colour and 16S PCR", tag = "D") +
+  guides(color = guide_legend(title = "Colour of swab and 16S PCR")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_pcrcol
+
+pcoa_species_extrkit <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Extr_kit)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (16.59%)") +
+  ylab("PCoA 2 (14.30%)") +
+  labs(title = "Species PCoA and day of extraction +  kit used", tag = "D") +
+  guides(color = guide_legend(title = "Day of extraction and  kit used")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_species_extrkit
+
+# pcoa_species_sitethresh <- ggplot(pcoa_species_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Site_thresh)) +
+#   geom_point(size = 3) +
+#   scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+#   theme_bw() + 
+#  xlim(-0.6,0.6) +
+#   ylim(-0.6,0.6) +
+#   xlab("PCoA 1 (16.59%)") +
+#   ylab("PCoA 2 (14.30%)") +
+#   labs(title = "Species PCoA qt country and threshold of 50K reads", tag = "D") +
+#   guides(color = guide_legend(title = "Country of origin and 50K threshold")) +
+#   annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+# pcoa_species_sitethresh
+
+### genus ###
+
+pcoa_genus_resampled <- cmdscale(genus_betabray_resampled, k = 2, eig = T)
+pcoa_genus_resampled_plotting <- as.data.frame(pcoa_genus_resampled$points)
+colnames(pcoa_genus_resampled_plotting) <- c("axis_1", "axis_2")
+
+# metadata was wrongly coupled bcs control was first row and in other last row
+metadata_pcoa <- metadata
+
+pcoa_genus_resampled_plotting$Extraction <- metadata_pcoa$Extraction
+pcoa_genus_resampled_plotting$Site <- metadata_pcoa$Site
+pcoa_genus_resampled_plotting$Colour <- metadata_pcoa$Colour
+pcoa_genus_resampled_plotting$PCR <- metadata_pcoa$PCR
+pcoa_genus_resampled_plotting$Kit <- metadata_pcoa$Kit
+pcoa_genus_resampled_plotting$Site_kit <- paste(metadata_pcoa$Site, metadata_pcoa$Kit)
+pcoa_genus_resampled_plotting$PCR_col <- paste(metadata_pcoa$PCR, metadata_pcoa$Colour)
+pcoa_genus_resampled_plotting$Extr_kit <- paste(metadata_pcoa$Extraction, metadata_pcoa$Kit)
+pcoa_genus_resampled$eig[1]/(sum(pcoa_genus_resampled$eig)) # calculating pcoa percentage
+pcoa_genus_resampled$eig[2]/(sum(pcoa_genus_resampled$eig)) # calculating pcoa percentage
+
+pcoa_genus_extr <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Extraction)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73", "black")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "PCoA at the genus level per extraction method", tag = "C") +
+  guides(color = guide_legend(title = "Extraction method")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_extr
+
+pcoa_genus_site <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Site)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "PCoA at the genus level per country of origin", tag = "C") +
+  guides(color = guide_legend(title = "Country of origin")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_site
+
+pcoa_genus_col <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Colour)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "Genus PCoA and colour of swab", tag = "C") +
+  guides(color = guide_legend(title = "Coloured swab?")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_col
+
+pcoa_genus_pcr <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = PCR)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "Genus PCoA and 16S PCR", tag = "C") +
+  guides(color = guide_legend(title = "Visible 16S PCR band?")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_pcr
+
+pcoa_genus_kit <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = as.factor(Kit))) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#009E73")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "genus PCoA and the number of kit used", tag = "C") +
+  guides(color = guide_legend(title = "Number of kit used")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_kit
+
+pcoa_genus_sitekit <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Site_kit)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "Genus PCoA per country and number of kit used", tag = "D") +
+  guides(color = guide_legend(title = "Country and number of kit")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_sitekit
+
+pcoa_genus_pcrcol <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = PCR_col)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "Species PCoA for colour and 16S PCR", tag = "D") +
+  guides(color = guide_legend(title = "Colour of swab and 16S PCR")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_pcrcol
+
+pcoa_genus_extrkit <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Extr_kit)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+  theme_bw() + 
+ xlim(-0.6,0.6) +
+  ylim(-0.6,0.6) +
+  xlab("PCoA 1 (21.71%)") +
+  ylab("PCoA 2 (16.04%)") +
+  labs(title = "Species PCoA and day of extraction +  kit used", tag = "D") +
+  guides(color = guide_legend(title = "Day of extraction and kit used")) +
+  annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+pcoa_genus_extrkit
+
+# pcoa_genus_sitethresh <- ggplot(pcoa_genus_resampled_plotting, aes(x = axis_1, y = axis_2, colour = Site_thresh)) +
+#   geom_point(size = 3) +
+#   scale_color_manual(values = c("#CC79A7", "#F0E442", "#0072B2", "#D55E00", "#000000")) +
+#   theme_bw() + 
+#  xlim(-0.6,0.6) +
+#   ylim(-0.6,0.6) +
+#   xlab("PCoA 1 (21.71%)") +
+#   ylab("PCoA 2 (16.04%)") +
+#   labs(title = "PCoA at the genus level against the site and threshold of 50K reads", tag = "D") +
+#   guides(color = guide_legend(title = "Country of origin and 50K threshold")) +
+#   annotate(geom = 'text', label = 'Bray-Curtis', x = Inf, y = -Inf, hjust = 1.15, vjust = -1)
+# pcoa_genus_sitethresh
+
+```
+
+```{r pcoa_removal}
+
+# rm(list=c("pcoa_genus_sitethresh", "pcoa_genus_extrkit", "pcoa_genus_pcrcol", "pcoa_genus_sitekit", "pcoa_genus_kit", "pcoa_genus_pcr", "pcoa_genus_col", "pcoa_genus_site", "pcoa_genus_extr", "pcoa_genus_resampled_plotting", "pcoa_species_sitethresh", "pcoa_species_extrkit", "pcoa_species_pcrcol", "pcoa_species_sitekit", "pcoa_species_kit", "pcoa_species_pcr", "pcoa_species_col", "pcoa_species_site", "pcoa_species_extr")) # removes temporary files
+
+```
+
+```{r permanova bray}
+
+# species 
+# combination all
+adonis2(species_betabray_resampled ~ Kit * Site, data = metadata_pcoa, permutations = 999)
+adonis2(species_betabray_resampled ~ PCR * Colour, data = metadata_pcoa, permutations = 999)
+adonis2(species_betabray_resampled ~ Extraction * Kit * Colour * Site * PCR * Reads * Bacterial_reads * Percentage_host_rem * Percentage_trimmed * Qubit * Bacterial_threshold50K, data = metadata_pcoa, permutations = 999)
+
+
+adonis2(species_betabray_resampled ~ Kit * Site, data = metadata_pcoa, permutations = 999)
+adonis2(species_betabray_resampled ~ PCR * Colour, data = metadata_pcoa, permutations = 999)
+adonis2(species_betabray_resampled ~ Extraction * Kit, data = metadata_pcoa, permutations = 999)
+
+# kit species
+permutest(betadisper(species_betabray_resampled, metadata_pcoa$Kit))
+TukeyHSD(betadisper(species_betabray_resampled, metadata_pcoa$Kit))
+adonis2(species_betabray_resampled ~ Kit, data = metadata_pcoa, permutations = 999)
+
+# site species
+permutest(betadisper(species_betabray_resampled, metadata_pcoa$Site))
+TukeyHSD(betadisper(species_betabray_resampled, metadata_pcoa$Site))
+adonis2(species_betabray_resampled ~ Site, data = metadata_pcoa, permutations = 999)
+
+# pcr species
+# permutest(betadisper(species_betabray_resampled, metadata_pcoa$PCR))
+# TukeyHSD(betadisper(species_betabray_resampled, metadata_pcoa$PCR))
+# adonis2(species_betabray_resampled ~ PCR, data = metadata_pcoa, permutations = 999)
+
+# colour species
+permutest(betadisper(species_betabray_resampled, metadata_pcoa$Colour))
+TukeyHSD(betadisper(species_betabray_resampled, metadata_pcoa$Colour))
+adonis2(species_betabray_resampled ~ Colour, data = metadata_pcoa, permutations = 999)
+
+# extraction species
+permutest(betadisper(species_betabray_resampled, metadata_pcoa$Extraction))
+TukeyHSD(betadisper(species_betabray_resampled, metadata_pcoa$Extraction))
+adonis2(species_betabray_resampled ~ Extraction, data = metadata_pcoa, permutations = 999)
+
+# kit and site species
+permutest(betadisper(species_betabray_resampled, paste(metadata_pcoa$Site, metadata_pcoa$Kit)))
+TukeyHSD(betadisper(species_betabray_resampled, paste(metadata_pcoa$Site, metadata_pcoa$Kit)))
+adonis2(species_betabray_resampled ~ paste(metadata_pcoa$Site, metadata_pcoa$Kit), data = metadata_pcoa, permutations = 999)
+
+# pcr and colour species
+permutest(betadisper(species_betabray_resampled, paste(metadata_pcoa$PCR, metadata_pcoa$Colour)))
+TukeyHSD(betadisper(species_betabray_resampled, paste(metadata_pcoa$PCR, metadata_pcoa$Colour)))
+adonis2(species_betabray_resampled ~ paste(metadata_pcoa$PCR, metadata_pcoa$Colour), data = metadata_pcoa, permutations = 999)
+
+# extraction and kit species
+permutest(betadisper(species_betabray_resampled, paste(metadata_pcoa$Extraction, metadata_pcoa$Kit)))
+TukeyHSD(betadisper(species_betabray_resampled, paste(metadata_pcoa$Extraction, metadata_pcoa$Kit)))
+adonis2(species_betabray_resampled ~ paste(metadata_pcoa$Extraction, metadata_pcoa$Kit), data = metadata_pcoa, permutations = 999)
+
+# genus 
+# all variables
+adonis2(genus_betabray_resampled ~ Kit * Site, data = metadata_pcoa, permutations = 999)
+adonis2(genus_betabray_resampled ~ PCR * Colour, data = metadata_pcoa, permutations = 999)
+adonis2(genus_betabray_resampled ~ Extraction * Kit * Colour * Site * PCR * Reads * Bacterial_reads * Percentage_host_rem * Percentage_trimmed * Qubit * Bacterial_threshold50K, data = metadata_pcoa, permutations = 999)
+
+adonis2(genus_betabray_resampled ~ Kit * Site, data = metadata_pcoa, permutations = 999)
+adonis2(genus_betabray_resampled ~ PCR * Colour, data = metadata_pcoa, permutations = 999)
+adonis2(genus_betabray_resampled ~ Extraction * Kit, data = metadata_pcoa, permutations = 999)
+
+# kit genus
+permutest(betadisper(genus_betabray_resampled, metadata_pcoa$Kit))
+TukeyHSD(betadisper(genus_betabray_resampled, metadata_pcoa$Kit))
+adonis2(genus_betabray_resampled ~ Kit, data = metadata_pcoa, permutations = 999)
+
+# site genus
+permutest(betadisper(genus_betabray_resampled, metadata_pcoa$Site))
+TukeyHSD(betadisper(genus_betabray_resampled, metadata_pcoa$Site))
+adonis2(genus_betabray_resampled ~ Site, data = metadata_pcoa, permutations = 999)
+
+# pcr genus
+# permutest(betadisper(genus_betabray_resampled, metadata_pcoa$PCR))
+# TukeyHSD(betadisper(genus_betabray_resampled, metadata_pcoa$PCR))
+# adonis2(genus_betabray_resampled ~ PCR, data = metadata_pcoa, permutations = 999)
+
+# colour genus
+permutest(betadisper(genus_betabray_resampled, metadata_pcoa$Colour))
+TukeyHSD(betadisper(genus_betabray_resampled, metadata_pcoa$Colour))
+adonis2(genus_betabray_resampled ~ Colour, data = metadata_pcoa, permutations = 999)
+
+# extraction genus
+permutest(betadisper(genus_betabray_resampled, metadata_pcoa$Extraction))
+TukeyHSD(betadisper(genus_betabray_resampled, metadata_pcoa$Extraction))
+adonis2(genus_betabray_resampled ~ Extraction, data = metadata_pcoa, permutations = 999)
+
+# site and kit genus
+permutest(betadisper(genus_betabray_resampled, paste(metadata_pcoa$Site, metadata_pcoa$Kit)))
+TukeyHSD(betadisper(genus_betabray_resampled, paste(metadata_pcoa$Site, metadata_pcoa$Kit)))
+adonis2(genus_betabray_resampled ~ paste(metadata_pcoa$Site, metadata_pcoa$Kit), data = metadata_pcoa, permutations = 999)
+
+# colour and pcr genus
+permutest(betadisper(genus_betabray_resampled, paste(metadata_pcoa$PCR, metadata_pcoa$Colour)))
+TukeyHSD(betadisper(genus_betabray_resampled, paste(metadata_pcoa$PCR, metadata_pcoa$Colour)))
+adonis2(genus_betabray_resampled ~ paste(metadata_pcoa$PCR, metadata_pcoa$Colour), data = metadata_pcoa, permutations = 999)
+
+# kit and extraction genus
+permutest(betadisper(genus_betabray_resampled, paste(metadata_pcoa$Extraction, metadata_pcoa$Kit)))
+TukeyHSD(betadisper(genus_betabray_resampled, paste(metadata_pcoa$Extraction, metadata_pcoa$Kit)))
+adonis2(genus_betabray_resampled ~ paste(metadata_pcoa$Extraction, metadata_pcoa$Kit), data = metadata_pcoa, permutations = 999)
+
+```
+
+```{r plot diversity per country species}
+
+## CHANGE SIGNIFS FROM EXTRACTION DAYS AND OTHER DEPENDING ON THEIR SIGNIFICANCE ## see above
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon", groupnames = c("Site"))
+shannon_analysis2 <- shannon_analysis[2:3,]
+metadata_pcoa2 <- metadata_pcoa[1:32,]
+
+Dive_site_species <- ggplot(metadata_pcoa2, aes(x = Site, y = Shannon)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis2, aes(color = Site, size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = Site, alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis2, aes(color = Site, ymin = Shannon+sd, ymax = Shannon+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis2, aes(color = Site, ymin = Shannon, ymax = Shannon+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   # geom_signif(comparisons= list(c("South_Africa","Uganda")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5, annotations = "**") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Sample origin", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Species Shannon diversity at country of origin", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+Dive_site_species
+
+```
+
+```{r plot diversity with kit species}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon", groupnames = c("Kit"))
+
+Dive_kit_species <- ggplot(metadata_pcoa, aes(x = as.factor(Kit), y = Shannon)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = as.factor(Kit), size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = as.factor(Kit), alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = as.factor(Kit), ymin = Shannon+sd, ymax = Shannon+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = as.factor(Kit), ymin = Shannon, ymax = Shannon+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   # geom_signif(comparisons= list(c("South_Africa","Uganda")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5, annotations = "**") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Kit used", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Species Shannon diversity and kit used", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+Dive_kit_species
+
+```
+
+```{r plot diversity with colour species}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon", groupnames = c("Colour"))
+
+Dive_colour_species <- ggplot(metadata_pcoa, aes(x = Colour, y = Shannon)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Colour, size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = Colour, alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Colour, ymin = Shannon+sd, ymax = Shannon+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Colour, ymin = Shannon, ymax = Shannon+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   geom_signif(comparisons= list(c("TRUE","FALSE")), # adding the significance automatically
+               map_signif_level = TRUE, y_position = 5, annotations = "*") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Colour", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Species Shannon diversity and colour", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+Dive_colour_species
+
+```
+
+```{r plot diversity extraction day species}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon", groupnames = c("Extraction"))
+
+Dive_extr_species <- ggplot(metadata_pcoa, aes(x = Extraction, y = Shannon)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Extraction, size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = Extraction, alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Extraction, ymin = Shannon+sd, ymax = Shannon+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Extraction, ymin = Shannon, ymax = Shannon+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73", "black")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   # geom_signif(comparisons= list(c("7MAY","13MAY")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5, annotations = "*") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Extraction day", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Species Shannon diversity and extraction day", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+Dive_extr_species
+
+```
+
+```{r plot diversity per country genus}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon_genus", groupnames = c("Site"))
+shannon_analysis2 <- shannon_analysis[2:3,]
+metadata_pcoa2 <- metadata_pcoa[1:32,]
+
+
+Dive_site_genus <- ggplot(metadata_pcoa2, aes(x = Site, y = Shannon_genus)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis2, aes(color = Site, size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = Site, alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis2, aes(color = Site, ymin = Shannon_genus+sd, ymax = Shannon_genus+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis2, aes(color = Site, ymin = Shannon_genus, ymax = Shannon_genus+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   # geom_signif(comparisons= list(c("South_Africa","Uganda")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5, annotations = "**") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Sample origin", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Genus Shannon diversity per country", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+
+Dive_site_genus
+```
+
+```{r plot diversity per kit genus}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon_genus", groupnames = c("Kit"))
+
+Dive_kit_genus <- ggplot(metadata_pcoa, aes(x = as.factor(Kit), y = Shannon_genus)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = as.factor(Kit), size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = as.factor(Kit), alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = as.factor(Kit), ymin = Shannon_genus+sd, ymax = Shannon_genus+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = as.factor(Kit), ymin = Shannon_genus, ymax = Shannon_genus+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   # geom_signif(comparisons= list(c("South_Africa","Uganda")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5, annotations = "**") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Kit used", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Genus Shannon diversity and kit used", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+Dive_kit_genus
+
+```
+
+```{r plot diversity extraction day genus}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon_genus", groupnames = c("Extraction"))
+
+Dive_extr_species <- ggplot(metadata_pcoa, aes(x = Extraction, y = Shannon_genus)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Extraction, size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = Extraction, alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Extraction, ymin = Shannon_genus+sd, ymax = Shannon_genus+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Extraction, ymin = Shannon_genus, ymax = Shannon_genus+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73", "black")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   # geom_signif(comparisons= list(c("7MAY","6MAY")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5, annotations = "*") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Extraction day", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Genus Shannon diversity and extraction day", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+Dive_extr_species
+
+```
+
+```{r plot diversity with colour genus}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+shannon_analysis <- data_summary(metadata_pcoa, varname = "Shannon_genus", groupnames = c("Colour"))
+
+Dive_colour_genus <- ggplot(metadata_pcoa, aes(x = Colour, y = Shannon_genus)) +
+   ylim(0,6) +
+   geom_jitter(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Colour, size = 1)) +
+   geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = Colour, alpha = 0.5), show.legend = FALSE) +
+   geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Colour, ymin = Shannon_genus+sd, ymax = Shannon_genus+sd), width = 0.15, show.legend = FALSE) +
+   geom_linerange(position = position_jitterdodge(jitter.width = 0), data = shannon_analysis, aes(color = Colour, ymin = Shannon_genus, ymax = Shannon_genus+sd), show.legend = FALSE) +
+   # scale_x_discrete(limits = c("No", "Yes")) +
+   scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73")) +
+   theme_bw() +
+   # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+   geom_signif(comparisons= list(c("TRUE","FALSE")), # adding the significance automatically
+               map_signif_level = TRUE, y_position = 5, annotations = "*") +
+   # geom_signif(comparisons= list(c("Zymo","MPBio")), # adding the significance automatically
+   #             map_signif_level = TRUE, y_position = 5.5, annotations = "**") +
+   ylab("Shannon diversity index") +
+   xlab(NULL) +
+   guides(color = guide_legend(title = "Colour", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+   labs(title = "Genus Shannon diversity and colour", tag = "B") +
+   theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+Dive_colour_genus
+
+
+```
+
+```{r plot_removal}
+
+# rm(list=c("Dive_Threshold500_species", "Dive_Threshold100_species", "Dive_Threshold50_species", "Dive_threshold20_species", "Dive_extr_species", "Dive_site_species", "Dive_Threshold500_genus", "Dive_Threshold100_genus", "Dive_Threshold50_genus", "Dive_threshold20_genus", "Dive_extr_genus", "Dive_site_genus", "Dive_kit_species")) # removes temporary files
+
+```
+
+```{r taxonomy plot all samples of South_Africa}
+
+# # go into excel, filter on phylum, then select 10 most abundant phyla, group rest under other. Then calculate percentage on them based on the root.
+# library(tidyr)
+# phylum_2_SA <- read.csv("~/data/Servaas/PediCAP/Bracken/bracken_uhgg_phylum_summary_num_SA.csv", check.names = FALSE)
+# phylu_SA_rem <- phylum_2_SA[1:11,]
+# # phylum_2_rem <- phylu_2_rem[,c(2,4,6,8,10,12,14,16,18,19)]
+# # colnames(phylum_2_rem)[1:9] <- c("Stool1-MagMAX","Stool2-MagMAX","Stool1-MPBio","Stool2-MPBio","Swab1-MagMAX","Swab2-MagMAX","Swab1-MPBio","Swab2-MPBio","Zymo")
+# 
+# 
+# phyla_data_SA <- melt(phylu_SA_rem, id = c("name"))
+# phyla_data_SA$value = as.numeric(phyla_data_SA$value) # fixed error "Error in `ylim()`: ! Discrete values supplied to continuous scale."
+# 
+# # reordering from big to small for easier comparison
+# phyla_data_SA$name <- reorder(phyla_data_SA$name, phyla_data_SA$value)
+# phyla_data_SA$name <- factor(phyla_data_SA$name, levels=levels(phyla_data_SA$name))
+# 
+# phylum_SA <- ggplot(aes(x=variable, y=value, fill=name), data=phyla_data_SA) +
+#   geom_bar(aes(fill=name), stat= "identity", position= "fill", width= 1) +
+#   # ylim(0,1) +
+#   theme(axis.text.x = element_text(angle=90)) +
+#   guides(x = guide_axis(angle = 90)) +
+#   ggtitle("Relative abundance in samples at phylum level") +
+#   labs(x= "Samples", fill= "Phylum", y= "Relative Abundance") +
+#   scale_fill_brewer(palette = "Paired")
+# phylum_SA
+```
+
+```{r taxonomy plot all samples of Uganda}
+
+# # go into excel, filter on phylum, then select 10 most abundant phyla, group rest under other. Then calculate percentage on them based on the root.
+# library(tidyr)
+# phylum_2_Ug<- read.csv("~/data/Servaas/PediCAP/Bracken/bracken_uhgg_phylum_summary_num_Uganda.csv", check.names = FALSE)
+# phylu_UG_rem <- phylum_2_Ug[1:11,]
+# # phylum_2_rem <- phylu_2_rem[,c(2,4,6,8,10,12,14,16,18,19)]
+# # colnames(phylum_2_rem)[1:9] <- c("Stool1-MagMAX","Stool2-MagMAX","Stool1-MPBio","Stool2-MPBio","Swab1-MagMAX","Swab2-MagMAX","Swab1-MPBio","Swab2-MPBio","Zymo")
+# 
+# 
+# phyla_data_UG <- melt(phylu_UG_rem, id = c("name"))
+# phyla_data_UG$value = as.numeric(phyla_data_UG$value) # fixed error "Error in `ylim()`: ! Discrete values supplied to continuous scale."
+# 
+# # reordering from big to small for easier comparison
+# phyla_data_UG$name <- reorder(phyla_data_UG$name, phyla_data_UG$value)
+# phyla_data_UG$name <- factor(phyla_data_UG$name, levels=levels(phyla_data_UG$name))
+# 
+# phylum_UG <- ggplot(aes(x=variable, y=value, fill=name), data=phyla_data_UG) +
+#   geom_bar(aes(fill=name), stat= "identity", position= "fill", width= 1) +
+#   # ylim(0,1) +
+#   theme(axis.text.x = element_text(angle=90)) +
+#   guides(x = guide_axis(angle = 90)) +
+#   ggtitle("Relative abundance in samples at phylum level") +
+#   labs(x= "Samples", fill= "Phylum", y= "Relative Abundance") +
+#   scale_fill_brewer(palette = "Paired")
+# phylum_UG
+```
+
+```{r taxonomy plot average countries}
+
+# # go into excel, filter on phylum, then select 10 most abundant phyla, group rest under other. Then calculate percentage on them based on the root.
+# library(tidyr)
+# phylum_average <- read.csv("~/data/Servaas/PediCAP/Bracken/bracken_uhgg_phylum_summary_num_average.csv", check.names = FALSE)
+# # phylu_2_average <- phylum_2[1:11,]
+# # phylum_2_rem <- phylu_2_rem[,c(2,4,6,8,10,12,14,16,18,19)]
+# # colnames(phylum_2_rem)[1:9] <- c("Stool1-MagMAX","Stool2-MagMAX","Stool1-MPBio","Stool2-MPBio","Swab1-MagMAX","Swab2-MagMAX","Swab1-MPBio","Swab2-MPBio","Zymo")
+# 
+# 
+# 
+# phyla_data_average <- melt(phylum_average, id = c("name"))
+# phyla_data_average$value = as.numeric(phyla_data_average$value) # fixed error "Error in `ylim()`: ! Discrete values supplied to continuous scale."
+# 
+# # reordering from big to small for easier comparison
+# phyla_data_average$name <- reorder(phyla_data_average$name, phyla_data_average$value)
+# phyla_data_average$name <- factor(phyla_data_average$name, levels=levels(phyla_data_average$name))
+# 
+# phylum_average_plot <- ggplot(aes(x=variable, y=value, fill=name), data=phyla_data_average) +
+#   geom_bar(aes(fill=name), stat= "identity", position= "fill", width= 1) +
+#   # ylim(0,1) +
+#   theme(axis.text.x = element_text(angle=90)) +
+#   guides(x = guide_axis(angle = 90)) +
+#   ggtitle("Relative abundance in samples at phylum level") +
+#   labs(x= "Samples", fill= "Phylum", y= "Relative Abundance") +
+#   scale_fill_brewer(palette = "Paired")
+# phylum_average_plot
+```
+
+```{r taxonomy plot negative samples}
+# 
+# # go into excel, filter on phylum, then select 10 most abundant phyla, group rest under other. Then calculate percentage on them based on the root.
+# library(tidyr)
+# phylum_negatives <- read.csv("~/data/Servaas/PediCAP/Bracken/bracken_uhgg_phylum_summary_num_neg.csv", check.names = FALSE)
+# # phylu_2_average <- phylum_2[1:11,]
+# # phylum_2_rem <- phylu_2_rem[,c(2,4,6,8,10,12,14,16,18,19)]
+# # colnames(phylum_2_rem)[1:9] <- c("Stool1-MagMAX","Stool2-MagMAX","Stool1-MPBio","Stool2-MPBio","Swab1-MagMAX","Swab2-MagMAX","Swab1-MPBio","Swab2-MPBio","Zymo")
+# 
+# 
+# 
+# phyla_data_negative <- melt(phylum_negatives, id = c("name"))
+# phyla_data_negative$value = as.numeric(phyla_data_negative$value) # fixed error "Error in `ylim()`: ! Discrete values supplied to continuous scale."
+# 
+# # reordering from big to small for easier comparison
+# phyla_data_negative$name <- reorder(phyla_data_negative$name, phyla_data_negative$value)
+# phyla_data_negative$name <- factor(phyla_data_negative$name, levels=levels(phyla_data_negative$name))
+# 
+# phylum_negative_plot <- ggplot(aes(x=variable, y=value, fill=name), data=phyla_data_negative) +
+#   geom_bar(aes(fill=name), stat= "identity", position= "fill", width= 1) +
+#   # ylim(0,1) +
+#   theme(axis.text.x = element_text(angle=90)) +
+#   guides(x = guide_axis(angle = 90)) +
+#   ggtitle("Relative abundance in samples at phylum level") +
+#   labs(x= "Samples", fill= "Phylum", y= "Relative Abundance") +
+#   scale_fill_brewer(palette = "Paired")
+# phylum_negative_plot
+```
+
+```{r taxonomy_plot_2}
+# grouped by kit
+# phyla_data_kit <- phylu_2_rem[,c('name','Stool1-MagMAX','Stool2-MagMAX','Stool1-MPBio','Stool2-MPBio','Stool3-MPBio','Stool4-MPBio','Zymo_Control','Stool3-Zymo','Stool4-Zymo','Swab1-MagMAX','Swab2-MagMAX','Swab1-MPBio','Swab2-MPBio','Swab3-MPBio','Swab4-MPBio','Swab3-Zymo','Swab4-Zymo')]
+# phyla_data_kit <- melt(phyla_data_kit, id = c("name"))
+# phyla_data_kit$value = as.numeric(phyla_data_kit$value)
+# 
+# # reordering from big to small for easier comparison
+# phyla_data_kit$name <- reorder(phyla_data_kit$name, phyla_data_kit$value)
+# phyla_data_kit$name <- factor(phyla_data_kit$name, levels=levels(phyla_data_kit$name))
+# 
+# taxonomy_kit <- ggplot(aes(x=variable, y=value, fill=name), data=phyla_data_kit) +
+#   geom_bar(aes(fill=name), stat= "identity", position= "fill", width= 1) +
+#   # ylim(0,1) +
+#   theme(axis.text.x = element_text(angle=90)) +
+#   guides(x = guide_axis(angle = 90)) +
+#   ggtitle("Relative abundance in samples at phylum level, ordered by sample and kit") +
+#   labs(x= "Samples", fill= "Phylum", y= "Relative Abundance") +
+#   scale_fill_brewer(palette = "Paired")
+# taxonomy_kit
+```
+
+```{r argsoap}
+# # add argsoap data to metadata excel directly, on the normalize cellnumber file, then calculate the resistance gene percentage or the relative RGPC
+# metadata2 <- read.csv("~/data/Servaas/XXXXXXXXXXXXXXXXXXX", header = TRUE, row.names = 1,check.names = FALSE)
+# metadata2 <- tibble::rownames_to_column(metadata2,"Samples")
+# # kit_order <- c('Stool1-MagMAX','Stool2-MagMAX','Stool1-MPBio','Stool2-MPBio','Stool3-MPBio','Stool4-MPBio','Stool3-Zymo','Stool4-Zymo','Swab1-MagMAX','Swab2-MagMAX','Swab1-MPBio','Swab2-MPBio','Swab3-MPBio','Swab4-MPBio','Swab3-Zymo','Swab4-Zymo')
+# 
+# metadata_kit <- metadata2
+# metadata_kit$Samples <- factor(metadata_kit$Samples, levels=kit_order)
+# metadata_kit <- metadata_kit[-1,]
+# 
+# # ggplot(data= metadata_kit, aes(x=Samples,y=argsoap)) + 
+# #   geom_point() +
+# #   labs(x= "Samples", y= "RGPC") +
+# #   theme(axis.text.x = element_text(angle=90)) +
+# #   ggtitle("ARGs-OAP RGPC")
+# # 
+# # # geom_bar
+# # ggplot(data= metadata_kit, aes(x=Samples, y=argsoap)) + 
+# #   geom_col() +
+# #   labs(x= "Samples", y= "RGPC") +
+# #   theme(axis.text.x = element_text(angle=90)) +
+# #   ggtitle("ARGs-OAP RGPC")
+```
+
+```{r argsoap_2}
+# # add argsoap data to metadata excel directly
+# argsoap2 <- read.csv("~/data/Servaas/magmax/Validation_2/ARGs_OAP/ARGs_OAP_output.normalize_cellnumber.type_SH2.tab.csv", header = TRUE, row.names = 1,check.names = FALSE)
+# argsoap2 <- argsoap2[-25,]
+# argsoap2 <- tibble::rownames_to_column(argsoap2,"Resistance_Genes")
+# # argoap3 <- argsoap2[,c('Stool1-MagMAX','Stool2-MagMAX','Stool1-MPBio','Stool2-MPBio','Stool3-MPBio','Stool4-MPBio','Stool3-Zymo','Stool4-Zymo','Swab1-MagMAX','Swab2-MagMAX','Swab1-MPBio','Swab2-MPBio','Swab3-MPBio','Swab4-MPBio','Swab3-Zymo','Swab4-Zymo')]
+# argsoap3 <- melt(argsoap2, id = c("Resistance_Genes"))
+# argsoap3_df <- argsoap3[argsoap3$value != 0, ]
+# argsoap3_df$value = as.numeric(argsoap3_df$value)
+# 
+# # reordering from big to small for easier comparison
+# argsoap3_df$Resistance_Genes <- reorder(argsoap3_df$Resistance_Genes, argsoap3_df$value)
+# argsoap3_df$Resistance_Genes <- factor(argsoap3_df$Resistance_Genes, levels=levels(argsoap3_df$Resistance_Genes))
+# 
+# argsoap_kit <- ggplot(aes(x=variable, y=value, fill=Resistance_Genes), data=argsoap3_df) +
+#   geom_bar(aes(fill=Resistance_Genes), stat= "identity", position= "fill", width= 1) +
+#   theme(axis.text.x = element_text(angle=90)) +
+#   guides(x = guide_axis(angle = 90)) +
+#   ggtitle("ARGs-OAP relative RGPC for kit comparison") +
+#   labs(x= "Samples", fill= "Resistance genes", y= "Relative RGPC") +
+#   scale_fill_brewer(palette = "Paired")
+# argsoap_kit
+# ```
+# 
+# ```{r argsoap_3}
+# # test which ones are significant
+# shapiro.test(metadata2$argsoap) # normal distribution
+# 
+# anova_extr_args = aov(argsoap ~ Extraction, metadata2)
+# TukeyHSD(anova_extr_args)
+# 
+# anova_sample_args = aov(Shannon ~ Site, metadata2)
+# TukeyHSD(anova_sample_args)
+# 
+# anova_replicate_args = aov(Shannon ~ Colour, metadata2)
+# TukeyHSD(anova_replicate_args)
+# 
+# anova_extr_args = aov(argsoap ~ PCR, metadata2)
+# TukeyHSD(anova_extr_args)
+# 
+# anova_sample_args = aov(Shannon ~ Kit, metadata2)
+# TukeyHSD(anova_sample_args)
+# 
+# anova_replicate_args = aov(Shannon ~ Threshold20, metadata2)
+# TukeyHSD(anova_replicate_args)
+# 
+# anova_replicate_args = aov(Shannon ~ Threshold50, metadata2)
+# TukeyHSD(anova_replicate_args)
+# 
+# anova_replicate_args = aov(Shannon ~ Threshold100, metadata2)
+# TukeyHSD(anova_replicate_args)
+# 
+# anova_replicate_args = aov(Shannon ~ Threshold500, metadata2)
+# TukeyHSD(anova_replicate_args)
+# 
+# data_summary <- function(data, varname, groupnames){
+#   require(plyr)
+#   summary_func <- function(x, col){
+#     c(mean = mean(x[[col]], na.rm=TRUE),
+#       sd = sd(x[[col]], na.rm=TRUE))
+#   }
+#   data_sum<-ddply(data, groupnames, .fun=summary_func,
+#                   varname)
+#   data_sum <- rename(data_sum, c("mean" = varname))
+#  return(data_sum)
+# }
+# 
+# # metadata2 <- metadata2[-1,] # done this to fix the mistake since no argsoap for control was there
+# argsoap_analysis2 <- data_summary(metadata2, varname = "argsoap", groupnames = c("Extraction"))
+# 
+# Dive_extr_species <- ggplot(metadata2, aes(x = Extraction, y = argsoap)) +
+#    ylim(0,2) +
+#    geom_jitter(position = position_jitterdodge(jitter.width = 0), data = argsoap_analysis2, aes(color = Extraction, size = 1)) +
+#    geom_point(position = position_jitterdodge(jitter.width = 0), aes(color = Extraction, alpha = 0.5), show.legend = FALSE) +
+#    geom_errorbar(position = position_jitterdodge(jitter.width = 0), data = argsoap_analysis2, aes(color = Extraction, ymin = argsoap+sd, ymax = argsoap+sd), width = 0.15, show.legend = FALSE) +
+#    geom_linerange(position = position_jitterdodge(jitter.width = 0), data = argsoap_analysis2, aes(color = Extraction, ymin = argsoap, ymax = argsoap+sd), show.legend = FALSE) +
+#    # scale_x_discrete(limits = c("No", "Yes")) +
+#    scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73")) +
+#    theme_bw() +
+#    # geom_segment(aes(x=1,y=5,xend=2,yend=5)) + # adds horizontal line to indicate significance between the two
+#    # geom_signif(comparisons= list(c("MagMAX","MPBio")), # adding the significance automatically
+#    #             map_signif_level = TRUE, y_position = 1, annotations = "**") +
+#    # geom_signif(comparisons= list(c("Zymo","MagMAX")), # adding the significance automatically
+#    #             map_signif_level = TRUE, y_position = 1.5, annotations = "***") +
+#    ylab("ARGs-OAP") +
+#    xlab(NULL) +
+#    guides(color = guide_legend(title = "Extraction method", title.position = "top", title.hjust = 0.5, label.hjust = 0.5), size = "none") +
+#    labs(title = "ARGs-OAP per extraction method", tag = "B") +
+#    theme(text = element_text(size=10), plot.title = element_text(size = 10, hjust = 0.5), axis.text.y = element_text(size = 10), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 10))
+# 
+# Dive_extr_species
+```
+
+```{r Maaslin2}
+# library(Maaslin2)
+# library(readr)
+# # library(tidyverse)
+# # check first which one we used previously so maybe not all of them have to be run. Uses output from 08_humann
+# # pathabundance and pathcoverage files with vlookup
+# # genefamilies <- read_tsv(file="~/data/Servaas/PediCAP/XXXXXXXXXXXXX/humann_genefamilies.tsv")
+# # genefamilies_df <- as.data.frame(genefamilies)
+# # row.names(genefamilies_df) <- genefamilies_df[,1]
+# # genefamilies_df_rem <- genefamilies_df[,2:XXXX]
+# # 
+# # pathabundance <- read_tsv(file="~/data/Servaas/PediCAP/XXXXXXXXXXXX/humann_pathabundance.tsv")
+# # pathabundance_df <- as.data.frame(pathabundance)
+# # row.names(pathabundance_df) <- pathabundance_df[,1]
+# # pathabundance_df_rem <- pathabundance_df[,2:XXXX]
+# # 
+# # pathcoverage <- read_tsv(file="~/data/Servaas/PediCAP/XXXXXXXXXXXXX/humann_pathcoverage.tsv")
+# # pathcoverage_df <- as.data.frame(pathcoverage)
+# # row.names(pathcoverage_df) <- pathcoverage_df[,1]
+# # pathcoverage_df_rem <- pathcoverage_df[,2:XXXX]
+# 
+# metadata_humann <- read.csv("~/data/Servaas/PediCAP/Metadata.csv", row.names=1)
+# # colnames(genefamilies_df_rem) <- c("Stool1-MPBio","Stool1-MagMAX","Stool2-MPBio","Stool2-MagMAX","Swab1-MPBio","Swab1-MagMAX", "Swab2-MPBio","Swab2-MagMAX")
+# # colnames(pathabundance_df_rem) <- c("Stool1-MPBio","Stool1-MagMAX","Stool2-MPBio","Stool2-MagMAX","Swab1-MPBio","Swab1-MagMAX", "Swab2-MPBio","Swab2-MagMAX")
+# # colnames(pathcoverage_df_rem) <- c("Stool1-MPBio","Stool1-MagMAX","Stool2-MPBio","Stool2-MagMAX","Swab1-MPBio","Swab1-MagMAX", "Swab2-MPBio","Swab2-MagMAX")
+# genefamilies_df_rem_t <- t(genefamilies_df_rem)
+# pathabundance_df_rem_t <- t(pathabundance_df_rem)
+# pathcoverage_df_rem_t <- t(pathcoverage_df_rem)
+# 
+# rm(list=c("genefamilies","genefamilies_df","genefamilies_df_rem","pathabundance","pathabundance_df","pathabundance_df_rem","pathcoverage","pathcoverage_df","pathcoverage_df_rem")) # removes temporary files
+# 
+# genefamilies_maaslin <- Maaslin2(input_data = genefamilies_df_rem_t,
+#                              input_metadata = metadata_humann,
+#                              output="~/data/Servaas/XXXXXXXXXXXXXX_genefamilies.csv",
+#                              fixed_effects =c("Extraction","Site","Threshold50"))
+# pathabundance_maaslin <- Maaslin2(input_data = pathabundance_df_rem_t,
+#                            input_metadata = metadata_humann,
+#                            output="~/data/Servaas/XXXXXXXXXXXXXX_pathabundance.csv",
+#                            fixed_effects =c("Extraction","Site","Threshold50"))
+# pathcoverage_maaslin <- Maaslin2(input_data = pathcoverage_df_rem_t,
+#                                  input_metadata = metadata_humann,
+#                                  output="~/data/Servaas/XXXXXXXXXXXXXX_pathcoverage.csv",
+#                                  fixed_effects =c("Extraction","Site","Threshold50"))
+```
+
+```{r deseq}
+# ### not for knitting bcs output files are wrong then
+# 
+# ## Species site South Africa vs Uganda
+# dds_species_extr1 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site)
+# dds_species_extr1$Site <- relevel(dds_species_extr1$Site, "South_Africa")
+# dds_species_extr1 <- DESeq(dds_species_extr1)
+# dds_species_extr_results1 <- results(dds_species_extr1, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_species_extr_results1$padj <0.1, na.rm = TRUE)
+# dds_species_extr_results_sig1 <- dds_species_extr_results1[which(dds_species_extr_results1$padj < 0.1), ]
+# # write.csv(dds_species_extr_results_sig1, file= "~/data/Servaas/PediCAP/DeSEQ2/species_site_t20.csv")
+# 
+# ## Species colour yes/no
+# dds_species_extr2 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Colour)
+# dds_species_extr2$Colour <- relevel(dds_species_extr2$Colour, "TRUE")
+# dds_species_extr2 <- DESeq(dds_species_extr2)
+# dds_species_extr_results2 <- results(dds_species_extr2, contrast = c("Colour", "TRUE", "FALSE"))
+# sum(dds_species_extr_results2$padj <0.1, na.rm = TRUE)
+# dds_species_extr_results_sig2 <- dds_species_extr_results2[which(dds_species_extr_results2$padj < 0.1), ]
+# # write.csv(dds_species_extr_results_sig2, file= "~/data/Servaas/PediCAP/DeSEQ2/species_colour_t20.csv")
+# 
+# ## Species pcr yes/no
+# dds_species_extr3 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ PCR)
+# dds_species_extr3$PCR <- relevel(dds_species_extr3$PCR, "TRUE")
+# dds_species_extr3 <- DESeq(dds_species_extr3)
+# dds_species_extr_results3 <- results(dds_species_extr3, contrast = c("PCR", "TRUE", "FALSE"))
+# sum(dds_species_extr_results3$padj <0.1, na.rm = TRUE)
+# dds_species_extr_results_sig3 <- dds_species_extr_results3[which(dds_species_extr_results3$padj < 0.1), ]
+# # write.csv(dds_species_extr_results_sig3, file= "~/data/Servaas/PediCAP/DeSEQ3/species_pcr_t20.csv")
+# 
+# # species 50k threshold
+# dds_species_extr4 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Threshold50)
+# dds_species_extr4$Threshold50 <- relevel(dds_species_extr4$Threshold50, "TRUE")
+# dds_species_extr4 <- DESeq(dds_species_extr4)
+# dds_species_extr_results4 <- results(dds_species_extr4, contrast = c("Threshold50", "TRUE", "FALSE"))
+# sum(dds_species_extr_results4$padj <0.1, na.rm = TRUE)
+# dds_species_extr_results_sig4 <- dds_species_extr_results4[which(dds_species_extr_results4$padj < 0.1), ]
+# # write.csv(dds_species_extr_results_sig4, file= "~/data/Servaas/PediCAP/DeSEQ4/species_threshold50_t20.csv")
+# 
+# ## Species 100K threshold
+# dds_species_extr5 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Threshold100)
+# dds_species_extr5$Threshold100 <- relevel(dds_species_extr5$Threshold100, "TRUE")
+# dds_species_extr5 <- DESeq(dds_species_extr5)
+# dds_species_extr_results5 <- results(dds_species_extr5, contrast = c("Threshold100", "TRUE", "FALSE"))
+# sum(dds_species_extr_results5$padj <0.1, na.rm = TRUE)
+# dds_species_extr_results_sig5 <- dds_species_extr_results5[which(dds_species_extr_results5$padj < 0.1), ]
+# # write.csv(dds_species_extr_results_sig5, file= "~/data/Servaas/PediCAP/DeSEQ5/species_threshold100_t20.csv")
+# 
+# ## Species 500K threshold
+# dds_species_extr6 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Threshold500)
+# dds_species_extr6$Threshold500 <- relevel(dds_species_extr6$Threshold500, "TRUE")
+# dds_species_extr6 <- DESeq(dds_species_extr6)
+# dds_species_extr_results6 <- results(dds_species_extr6, contrast = c("Threshold500", "TRUE", "FALSE"))
+# sum(dds_species_extr_results6$padj <0.1, na.rm = TRUE)
+# dds_species_extr_results_sig6 <- dds_species_extr_results6[which(dds_species_extr_results6$padj < 0.1), ]
+# # write.csv(dds_species_extr_results_sig6, file= "~/data/Servaas/PediCAP/DeSEQ6/species_threshold500_t20.csv")
+# 
+# ## Species colour and pcr
+# dds_species_stextr7 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ PCR + Colour)
+# dds_species_stextr7$PCR <- relevel(dds_species_extr7$PCR, "TRUE")
+# dds_species_stextr7 <- DESeq(dds_species_stextr7)
+# dds_species_stextr_results7 <- results(dds_species_stextr7, contrast = c("PCR", "TRUE", "FALSE"))
+# sum(dds_species_stextr_results7$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig7 <- dds_species_stextr_results7[which(dds_species_stextr_results7$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig7, file= "~/data/Servaas/PediCAP/DeSEQ7/species_pcr_colour_t20.csv")
+# 
+# ## Species kit and 50K threshold
+# dds_species_stextr8 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Threshold50)
+# dds_species_stextr8$Kit <- relevel(dds_species_extr8$Kit, "3")
+# dds_species_stextr8 <- DESeq(dds_species_stextr8)
+# dds_species_stextr_results8 <- results(dds_species_stextr8, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_species_stextr_results8$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig8 <- dds_species_stextr_results8[which(dds_species_stextr_results8$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig8, file= "~/data/Servaas/PediCAP/DeSEQ8/species_threshold50_kit_t20.csv")
+# 
+# ## Species kit and 100K threshold
+# dds_species_stextr9 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Threshold100)
+# dds_species_stextr9$Kit <- relevel(dds_species_extr9$Kit, "3")
+# dds_species_stextr9 <- DESeq(dds_species_stextr9)
+# dds_species_stextr_results9 <- results(dds_species_stextr9, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_species_stextr_results9$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig9 <- dds_species_stextr_results9[which(dds_species_stextr_results9$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig9, file= "~/data/Servaas/PediCAP/DeSEQ9/species_threshold100_kit_t20.csv")
+# 
+# ## Species kit and 500K threshold
+# dds_species_stextr2 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Threshold500)
+# dds_species_stextr2$Kit <- relevel(dds_species_extr2$Kit, "3")
+# dds_species_stextr2 <- DESeq(dds_species_stextr2)
+# dds_species_stextr_results2 <- results(dds_species_stextr2, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_species_stextr_results2$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig2 <- dds_species_stextr_results2[which(dds_species_stextr_results2$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig2, file= "~/data/Servaas/PediCAP/DeSEQ2/species_threshold500_kit_t20.csv")
+# 
+# ## Species kit and 50K bacterial threshold
+# dds_species_stextr14 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Bacterial_threshold50K)
+# dds_species_stextr14$Kit <- relevel(dds_species_extr14$Kit, "3")
+# dds_species_stextr14 <- DESeq(dds_species_stextr14)
+# dds_species_stextr_results14 <- results(dds_species_stextr14, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_species_stextr_results14$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig14 <- dds_species_stextr_results14[which(dds_species_stextr_results14$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig14, file= "~/data/Servaas/PediCAP/DeSEQ2/species_bact_threshold50_kit_t20.csv")
+# 
+# ## Species site and 50K threshold
+# dds_species_stextr10 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Threshold50)
+# dds_species_stextr10$Site <- relevel(dds_species_extr10$Site, "South_Africa")
+# dds_species_stextr10 <- DESeq(dds_species_stextr10)
+# dds_species_stextr_results10 <- results(dds_species_stextr10, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_species_stextr_results10$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig10 <- dds_species_stextr_results10[which(dds_species_stextr_results10$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig10, file= "~/data/Servaas/PediCAP/DeSEQ10/species_threshold50_site_t20.csv")
+# 
+# ## Species site and 100K threshold
+# dds_species_stextr11 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Threshold100)
+# dds_species_stextr11$Site <- relevel(dds_species_extr11$Site, "South_Africa")
+# dds_species_stextr11 <- DESeq(dds_species_stextr11)
+# dds_species_stextr_results11 <- results(dds_species_stextr11, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_species_stextr_results11$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig11 <- dds_species_stextr_results11[which(dds_species_stextr_results11$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig11, file= "~/data/Servaas/PediCAP/DeSEQ11/species_threshold100_site_t20.csv")
+# 
+# ## Species site and 500K threshold
+# dds_species_stextr12 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Threshold500)
+# dds_species_stextr12$Site <- relevel(dds_species_extr12$Site, "South_Africa")
+# dds_species_stextr12 <- DESeq(dds_species_stextr12)
+# dds_species_stextr_results12 <- results(dds_species_stextr12, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_species_stextr_results12$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig12 <- dds_species_stextr_results12[which(dds_species_stextr_results12$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig12, file= "~/data/Servaas/PediCAP/DeSEQ12/species_threshold500_site_t20.csv")
+# 
+# ## species Site and 50K bacterial threshold
+# dds_species_stextr15 <- DESeqDataSetFromMatrix(countData = t(species), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Bacterial_threshold50K)
+# dds_species_stextr15$Site <- relevel(dds_species_extr15$Site, "3")
+# dds_species_stextr15 <- DESeq(dds_species_stextr15)
+# dds_species_stextr_results15 <- results(dds_species_stextr15, contrast = c("Site", "1", "2", "3"))
+# sum(dds_species_stextr_results15$padj <0.1, na.rm = TRUE)
+# dds_species_stextr_results_sig15 <- dds_species_stextr_results15[which(dds_species_stextr_results15$padj < 0.1), ]
+# # write.csv(dds_species_stextr_results_sig15, file= "~/data/Servaas/PediCAP/DeSEQ2/species_bact_threshold50_Site_t20.csv")
+# 
+# # #### genus
+# 
+# ## genus site South Africa vs Uganda
+# dds_genus_extr1 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site)
+# dds_genus_extr1$Site <- relevel(dds_genus_extr1$Site, "South_Africa")
+# dds_genus_extr1 <- DESeq(dds_genus_extr1)
+# dds_genus_extr_results1 <- results(dds_genus_extr1, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_genus_extr_results1$padj <0.1, na.rm = TRUE)
+# dds_genus_extr_results_sig1 <- dds_genus_extr_results1[which(dds_genus_extr_results1$padj < 0.1), ]
+# # write.csv(dds_genus_extr_results_sig1, file= "~/data/Servaas/PediCAP/DeSEQ2/genus_site_t20.csv")
+# 
+# ## genus colour yes/no
+# dds_genus_extr2 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Colour)
+# dds_genus_extr2$Colour <- relevel(dds_genus_extr2$Colour, "TRUE")
+# dds_genus_extr2 <- DESeq(dds_genus_extr2)
+# dds_genus_extr_results2 <- results(dds_genus_extr2, contrast = c("Colour", "TRUE", "FALSE"))
+# sum(dds_genus_extr_results2$padj <0.1, na.rm = TRUE)
+# dds_genus_extr_results_sig2 <- dds_genus_extr_results2[which(dds_genus_extr_results2$padj < 0.1), ]
+# # write.csv(dds_genus_extr_results_sig2, file= "~/data/Servaas/PediCAP/DeSEQ2/genus_colour_t20.csv")
+# 
+# ## genus pcr yes/no
+# dds_genus_extr3 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ PCR)
+# dds_genus_extr3$PCR <- relevel(dds_genus_extr3$PCR, "TRUE")
+# dds_genus_extr3 <- DESeq(dds_genus_extr3)
+# dds_genus_extr_results3 <- results(dds_genus_extr3, contrast = c("PCR", "TRUE", "FALSE"))
+# sum(dds_genus_extr_results3$padj <0.1, na.rm = TRUE)
+# dds_genus_extr_results_sig3 <- dds_genus_extr_results3[which(dds_genus_extr_results3$padj < 0.1), ]
+# # write.csv(dds_genus_extr_results_sig3, file= "~/data/Servaas/PediCAP/DeSEQ3/genus_pcr_t20.csv")
+# 
+# dds_genus_extr4 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Threshold50)
+# dds_genus_extr4$Threshold50 <- relevel(dds_genus_extr4$Threshold50, "TRUE")
+# dds_genus_extr4 <- DESeq(dds_genus_extr4)
+# dds_genus_extr_results4 <- results(dds_genus_extr4, contrast = c("Threshold50", "TRUE", "FALSE"))
+# sum(dds_genus_extr_results4$padj <0.1, na.rm = TRUE)
+# dds_genus_extr_results_sig4 <- dds_genus_extr_results4[which(dds_genus_extr_results4$padj < 0.1), ]
+# # write.csv(dds_genus_extr_results_sig4, file= "~/data/Servaas/PediCAP/DeSEQ4/genus_threshold50_t20.csv")
+# 
+# ## genus 100K threshold
+# dds_genus_extr5 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Threshold100)
+# dds_genus_extr5$Threshold100 <- relevel(dds_genus_extr5$Threshold100, "TRUE")
+# dds_genus_extr5 <- DESeq(dds_genus_extr5)
+# dds_genus_extr_results5 <- results(dds_genus_extr5, contrast = c("Threshold100", "TRUE", "FALSE"))
+# sum(dds_genus_extr_results5$padj <0.1, na.rm = TRUE)
+# dds_genus_extr_results_sig5 <- dds_genus_extr_results5[which(dds_genus_extr_results5$padj < 0.1), ]
+# # write.csv(dds_genus_extr_results_sig5, file= "~/data/Servaas/PediCAP/DeSEQ5/genus_threshold100_t20.csv")
+# 
+# ## genus 500K threshold
+# dds_genus_extr6 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Threshold500)
+# dds_genus_extr6$Threshold500 <- relevel(dds_genus_extr6$Threshold500, "TRUE")
+# dds_genus_extr6 <- DESeq(dds_genus_extr6)
+# dds_genus_extr_results6 <- results(dds_genus_extr6, contrast = c("Threshold500", "TRUE", "FALSE"))
+# sum(dds_genus_extr_results6$padj <0.1, na.rm = TRUE)
+# dds_genus_extr_results_sig6 <- dds_genus_extr_results6[which(dds_genus_extr_results6$padj < 0.1), ]
+# # write.csv(dds_genus_extr_results_sig6, file= "~/data/Servaas/PediCAP/DeSEQ6/genus_threshold500_t20.csv")
+# 
+# ## genus colour and pcr
+# dds_genus_stextr7 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ PCR + Colour)
+# dds_genus_stextr7$PCR <- relevel(dds_genus_extr7$PCR, "TRUE")
+# dds_genus_stextr7 <- DESeq(dds_genus_stextr7)
+# dds_genus_stextr_results7 <- results(dds_genus_stextr7, contrast = c("PCR", "TRUE", "FALSE"))
+# sum(dds_genus_stextr_results7$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig7 <- dds_genus_stextr_results7[which(dds_genus_stextr_results7$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig7, file= "~/data/Servaas/PediCAP/DeSEQ7/genus_pcr_colour_t20.csv")
+# 
+# ## genus kit and 50K threshold
+# dds_genus_stextr8 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Threshold50)
+# dds_genus_stextr8$Kit <- relevel(dds_genus_extr8$Kit, "3")
+# dds_genus_stextr8 <- DESeq(dds_genus_stextr8)
+# dds_genus_stextr_results8 <- results(dds_genus_stextr8, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_genus_stextr_results8$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig8 <- dds_genus_stextr_results8[which(dds_genus_stextr_results8$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig8, file= "~/data/Servaas/PediCAP/DeSEQ8/genus_threshold50_kit_t20.csv")
+# 
+# ## genus kit and 100K threshold
+# dds_genus_stextr9 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Threshold100)
+# dds_genus_stextr9$Kit <- relevel(dds_genus_extr9$Kit, "3")
+# dds_genus_stextr9 <- DESeq(dds_genus_stextr9)
+# dds_genus_stextr_results9 <- results(dds_genus_stextr9, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_genus_stextr_results9$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig9 <- dds_genus_stextr_results9[which(dds_genus_stextr_results9$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig9, file= "~/data/Servaas/PediCAP/DeSEQ9/genus_threshold100_kit_t20.csv")
+# 
+# ## genus kit and 500K threshold
+# dds_genus_stextr2 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Threshold500)
+# dds_genus_stextr2$Kit <- relevel(dds_genus_extr2$Kit, "3")
+# dds_genus_stextr2 <- DESeq(dds_genus_stextr2)
+# dds_genus_stextr_results2 <- results(dds_genus_stextr2, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_genus_stextr_results2$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig2 <- dds_genus_stextr_results2[which(dds_genus_stextr_results2$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig2, file= "~/data/Servaas/PediCAP/DeSEQ2/genus_threshold500_kit_t20.csv")
+# 
+# ## genus kit and 50K bacterial threshold
+# dds_genus_stextr14 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Kit + Bacterial_threshold50K)
+# dds_genus_stextr14$Kit <- relevel(dds_genus_extr14$Kit, "3")
+# dds_genus_stextr14 <- DESeq(dds_genus_stextr14)
+# dds_genus_stextr_results14 <- results(dds_genus_stextr14, contrast = c("Kit", "1", "2", "3"))
+# sum(dds_genus_stextr_results14$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig14 <- dds_genus_stextr_results14[which(dds_genus_stextr_results14$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig14, file= "~/data/Servaas/PediCAP/DeSEQ2/genus_bact_threshold50_kit_t20.csv")
+# 
+# ## genus site and 50K threshold
+# dds_genus_stextr10 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Threshold50)
+# dds_genus_stextr10$Site <- relevel(dds_genus_extr10$Site, "South_Africa")
+# dds_genus_stextr10 <- DESeq(dds_genus_stextr10)
+# dds_genus_stextr_results10 <- results(dds_genus_stextr10, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_genus_stextr_results10$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig10 <- dds_genus_stextr_results10[which(dds_genus_stextr_results10$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig10, file= "~/data/Servaas/PediCAP/DeSEQ10/genus_threshold50_site_t20.csv")
+# 
+# ## genus site and 100K threshold
+# dds_genus_stextr11 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Threshold100)
+# dds_genus_stextr11$Site <- relevel(dds_genus_extr11$Site, "South_Africa")
+# dds_genus_stextr11 <- DESeq(dds_genus_stextr11)
+# dds_genus_stextr_results11 <- results(dds_genus_stextr11, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_genus_stextr_results11$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig11 <- dds_genus_stextr_results11[which(dds_genus_stextr_results11$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig11, file= "~/data/Servaas/PediCAP/DeSEQ11/genus_threshold100_site_t20.csv")
+# 
+# ## genus site and 500K threshold
+# dds_genus_stextr12 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Threshold500)
+# dds_genus_stextr12$Site <- relevel(dds_genus_extr12$Site, "South_Africa")
+# dds_genus_stextr12 <- DESeq(dds_genus_stextr12)
+# dds_genus_stextr_results12 <- results(dds_genus_stextr12, contrast = c("Site", "South_Africa", "Uganda"))
+# sum(dds_genus_stextr_results12$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig12 <- dds_genus_stextr_results12[which(dds_genus_stextr_results12$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig12, file= "~/data/Servaas/PediCAP/DeSEQ12/genus_threshold500_site_t20.csv")
+# 
+# ## genus Site and 50K bacterial threshold
+# dds_genus_stextr15 <- DESeqDataSetFromMatrix(countData = t(genus), colData = as.data.frame(unclass(metadata), stringsAsFactors = TRUE), design = ~ Site + Bacterial_threshold50K)
+# dds_genus_stextr15$Site <- relevel(dds_genus_extr15$Site, "3")
+# dds_genus_stextr15 <- DESeq(dds_genus_stextr15)
+# dds_genus_stextr_results15 <- results(dds_genus_stextr15, contrast = c("Site", "1", "2", "3"))
+# sum(dds_genus_stextr_results15$padj <0.1, na.rm = TRUE)
+# dds_genus_stextr_results_sig15 <- dds_genus_stextr_results15[which(dds_genus_stextr_results15$padj < 0.1), ]
+# # write.csv(dds_genus_stextr_results_sig15, file= "~/data/Servaas/PediCAP/DeSEQ2/genus_bact_threshold50_Site_t20.csv")
+```
