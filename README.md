@@ -10,7 +10,7 @@ File formats and additional information about the data can be found within the f
 
 Scripts:
 The .Rmd files are markdown documents containing the different R codes used to analyze the sequencing data.
-These scripts require R (version 2023.12.1, build 402) and relevant packages to run. A separate file with specific installation instructions is included in the repository.
+These scripts require R (version 2023.12.1, build 402) and relevant packages to run.
 
 Contact:
 For any inquiries or questions regarding the scripts, or the research presented in the thesis, please feel free to contact me. For other inquiries, please contact the university.
